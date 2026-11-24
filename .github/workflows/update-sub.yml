@@ -1,0 +1,104 @@
+name: Update VPN Subscription
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch, rename to Бахмут VPN #N🇺🇦 and save sub.txt
+        run: |
+          node -e '
+          const fs = require("fs");
+          const SOURCE_URL = "https://us-east.bltscdn.com/v2/688a9058-57cf-43cc-b45a-b3b921d47a19";
+          const LABEL_PREFIX = "Бахмут VPN";
+          const FLAG = "🇺🇦";
+
+          function decodeBase64Flexible(str) {
+            let clean = str.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+            while (clean.length % 4 !== 0) clean += "=";
+            return Buffer.from(clean, "base64").toString("utf-8");
+          }
+
+          function renameServer(rawLine, index) {
+            const trimmed = rawLine.trim();
+            const label = `${LABEL_PREFIX} #${index}${FLAG}`;
+
+            if (trimmed.startsWith("vmess://")) {
+              try {
+                const b64 = trimmed.slice("vmess://".length);
+                const json = JSON.parse(decodeBase64Flexible(b64));
+                json.ps = label;
+                return "vmess://" + Buffer.from(JSON.stringify(json), "utf-8").toString("base64");
+              } catch (_) {}
+            }
+
+            const basePart = trimmed.split("#")[0];
+            return `${basePart}#${encodeURIComponent(label)}`;
+          }
+
+          async function run() {
+            const resp = await fetch(SOURCE_URL, {
+              headers: { "User-Agent": "v2rayNG/1.9" }
+            });
+            if (!resp.ok) {
+              throw new Error(`Upstream HTTP ${resp.status}`);
+            }
+
+            const rawText = (await resp.text()).trim();
+            let content = rawText;
+
+            if (!rawText.includes("://")) {
+              try {
+                const decoded = decodeBase64Flexible(rawText);
+                if (decoded.includes("://")) {
+                  content = decoded;
+                }
+              } catch (_) {}
+            }
+
+            const lines = content.split(/\r?\n/);
+            let idx = 1;
+            const out = [];
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.includes("://")) continue;
+              out.push(renameServer(trimmed, idx));
+              idx++;
+            }
+
+            if (out.length === 0) {
+              throw new Error("No valid proxy links found");
+            }
+
+            fs.writeFileSync("sub.txt", out.join("\n") + "\n", "utf-8");
+            console.log(`Updated ${out.length} servers as Бахмут VPN #N🇺🇦`);
+          }
+
+          run().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          '
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sub.txt
+          if git diff --staged --quiet; then
+            echo "No changes in sub.txt"
+          else
+            git commit -m "Update Бахмут VPN subscription"
+            git push
+          fi
