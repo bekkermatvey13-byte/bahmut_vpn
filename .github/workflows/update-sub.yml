@@ -2,7 +2,7 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -18,151 +18,119 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Fetch and merge VLESS nodes
         run: |
           python3 - << 'EOF'
           import base64
-          import json
           import re
-          import socket
-          import urllib.parse
           import urllib.request
-          from concurrent.futures import ThreadPoolExecutor
+          from urllib.parse import urlparse, quote
 
-          PRIMARY_SOURCES = [
+          SUBSCRIPTION_TITLE = "Бахмут VPN 🇺🇦"
+
+          PRIMARY_URLS = [
               "https://us-east.bltscdn.com/sub/bolt",
               "https://us-east.bltscdn.com/sub",
           ]
 
-          FALLBACK_SOURCES = [
-              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt",
-              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/vless.txt",
-              "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/vless",
-              "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt",
+          USER_AGENTS = [
+              "v2rayNG/1.8.23",
+              "Happ/1.0",
+              "Streisand/1.0",
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           ]
 
-          MAX_EXTRA_NODES = 30
+          def decode_maybe_base64(text: str) -> str:
+              cleaned = text.strip()
+              if "vless://" in cleaned:
+                  return cleaned
+              try:
+                  pad = len(cleaned) % 4
+                  if pad:
+                      cleaned += "=" * (4 - pad)
+                  decoded = base64.b64decode(cleaned).decode("utf-8", errors="ignore")
+                  if "vless://" in decoded:
+                      return decoded
+              except Exception:
+                  pass
+              return text
 
-          def extract_vless_from_text(text):
-              found = []
-              if not text:
-                  return found
-
-              # Прямые vless:// ссылки
-              for line in text.splitlines():
-                  s = line.strip()
-                  if s.startswith("vless://"):
-                      found.append(s)
-
-              # Если попались vless:// внутри строки без переносов
-              for m in re.findall(r"vless://[^\s\"'<>]+", text):
-                  found.append(m.strip())
-
-              # Попытка декодировать base64
-              if not found:
+          def fetch_primary(url: str) -> list[str]:
+              for ua in USER_AGENTS:
                   try:
-                      compact = "".join(text.split())
-                      padded = compact + "=" * (-len(compact) % 4)
-                      decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
-                      for line in decoded.splitlines():
-                          s = line.strip()
-                          if s.startswith("vless://"):
-                              found.append(s)
-                      for m in re.findall(r"vless://[^\s\"'<>]+", decoded):
-                          found.append(m.strip())
-                  except Exception:
-                      pass
-
-              return found
-
-          def fetch_source(url):
-              headers_list = [
-                  {"User-Agent": "v2rayNG/1.9.10", "Accept": "*/*"},
-                  {"User-Agent": "HiddifyNext/2.5.7", "Accept": "*/*"},
-                  {"User-Agent": "Mozilla/5.0 (Linux; Android 14)", "Accept": "*/*"},
-              ]
-              for hdrs in headers_list:
-                  try:
-                      req = urllib.request.Request(url, headers=hdrs)
-                      with urllib.request.urlopen(req, timeout=20) as resp:
-                          raw = resp.read().decode("utf-8", errors="ignore").strip()
-                      links = extract_vless_from_text(raw)
-                      if links:
-                          print(f"[OK] {url} -> {len(links)} vless")
-                          return links
+                      req = urllib.request.Request(
+                          url,
+                          headers={
+                              "User-Agent": ua,
+                              "Accept": "*/*",
+                          },
+                      )
+                      with urllib.request.urlopen(req, timeout=15) as resp:
+                          raw = resp.read().decode("utf-8", errors="ignore")
+                          decoded = decode_maybe_base64(raw)
+                          nodes = re.findall(r"vless://[^\s\"'<>\\]+", decoded)
+                          if nodes:
+                              print(f"[OK] {url} (UA: {ua}) -> {len(nodes)} nodes")
+                              return nodes
+                          else:
+                              preview = raw[:120].replace("\n", " ")
+                              print(f"[EMPTY] {url} (UA: {ua}) -> status {resp.status}, body: {preview}")
                   except Exception as e:
-                      last_err = e
-              print(f"[SKIP/FAIL] {url}")
+                      print(f"[FAIL] {url} (UA: {ua}) -> {e}")
               return []
 
-          def parse_host_port(uri):
-              m = re.match(r"^vless://[^@]+@(\[[^\]]+\]|[^:/?#]+):(\d+)", uri)
-              if not m:
-                  return None, None
-              return m.group(1).strip("[]"), int(m.group(2))
+          def node_key(uri: str) -> str:
+              base = uri.split("#", 1)[0]
+              p = urlparse(base)
+              return f"{p.username}@{p.hostname}:{p.port}"
 
-          def is_alive(uri):
-              host, port = parse_host_port(uri)
-              if not host or not port:
-                  return False
-              try:
-                  with socket.create_connection((host, port), timeout=2.5):
-                      return True
-              except Exception:
-                  return False
-
+          # 1. Загружаем ручные узлы из manual.txt
           manual_nodes = []
           try:
               with open("manual.txt", "r", encoding="utf-8") as f:
-                  manual_nodes = [line.strip() for line in f if line.strip().startswith("vless://")]
+                  for line in f:
+                      line = line.strip()
+                      if line.startswith("vless://"):
+                          manual_nodes.append(line)
           except FileNotFoundError:
               pass
 
-          seen_base = {u.split("#", 1)[0] for u in manual_nodes}
+          # 2. Загружаем узлы только из исходной подписки
+          primary_nodes = []
+          for url in PRIMARY_URLS:
+              found = fetch_primary(url)
+              if found:
+                  primary_nodes.extend(found)
+                  break
 
-          # Сначала пробуем свежие ключи с исходника
-          fresh_primary = []
-          for src in PRIMARY_SOURCES:
-              for u in fetch_source(src):
-                  base = u.split("#", 1)[0]
-                  if base not in seen_base:
-                      seen_base.add(base)
-                      fresh_primary.append(base)
+          # 3. Объединяем без дубликатов и переименовываем
+          seen = set()
+          final_nodes = []
+          idx = 1
 
-          # Затем добираем с резервных списков
-          fresh_fallback = []
-          for src in FALLBACK_SOURCES:
-              for u in fetch_source(src):
-                  base = u.split("#", 1)[0]
-                  if base not in seen_base and ("security=reality" in base or "security=tls" in base):
-                      seen_base.add(base)
-                      fresh_fallback.append(base)
+          for uri in manual_nodes + primary_nodes:
+              key = node_key(uri)
+              if not key or key in seen:
+                  continue
+              seen.add(key)
+              base = uri.split("#", 1)[0]
+              label = quote(f"Бахмут VPN #{idx}🇺🇦")
+              final_nodes.append(f"{base}#{label}")
+              idx += 1
 
-          candidates = fresh_primary + fresh_fallback
-          print(f"Primary fresh: {len(fresh_primary)}, Fallback candidates: {len(fresh_fallback)}")
-
-          alive_extra = []
-          with ThreadPoolExecutor(max_workers=40) as pool:
-              for uri, ok in zip(candidates[:400], pool.map(is_alive, candidates[:400])):
-                  if ok:
-                      alive_extra.append(uri)
-                      if len(alive_extra) >= MAX_EXTRA_NODES:
-                          break
-
-          all_bases = [u.split("#", 1)[0] for u in manual_nodes] + alive_extra
-
-          final_lines = []
-          for idx, base in enumerate(all_bases, start=1):
-              name = urllib.parse.quote(f"Бахмут VPN #{idx}🇺🇦")
-              final_lines.append(f"{base}#{name}")
+          # 4. Формируем заголовок подписки и записываем sub.txt
+          title_b64 = base64.b64encode(SUBSCRIPTION_TITLE.encode("utf-8")).decode("ascii")
+          header_lines = [
+              f"#profile-title: base64:{title_b64}",
+              "#profile-update-interval: 1",
+          ]
 
           with open("sub.txt", "w", encoding="utf-8") as f:
-              f.write("\n".join(final_lines) + "\n")
+              f.write("\n".join(header_lines + final_nodes) + "\n")
 
-          print(f"Saved {len(final_lines)} nodes ({len(manual_nodes)} manual + {len(alive_extra)} auto).")
+          print(f"Saved {len(final_nodes)} nodes ({len(manual_nodes)} manual + {len(final_nodes) - len(manual_nodes)} from primary).")
           EOF
 
       - name: Commit and push updated subscription
@@ -170,6 +138,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add sub.txt
-          git diff --staged --quiet || git commit -m "Auto-update subscription nodes"
-          git push
-
+          if ! git diff --staged --quiet; then
+            git commit -m "Update subscription from primary source"
+            git push
+          else
+            echo "No changes to commit"
+          fi
