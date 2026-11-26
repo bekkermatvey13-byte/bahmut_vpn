@@ -2,7 +2,7 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,73 +15,161 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch, rename to Бахмут VPN #N🇺🇦 and save sub.txt
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Fetch and merge VLESS nodes
         run: |
-          node -e '
-            const fs = require("fs");
+          python3 - << 'EOF'
+          import base64
+          import json
+          import re
+          import socket
+          import urllib.parse
+          import urllib.request
+          from concurrent.futures import ThreadPoolExecutor
 
-            const SOURCES = [
-              "https://us-east.bltscdn.com/v2/688a9058-57cf-43cc-b45a-b3b921d47a19"
-            ];
+          PRIMARY_SOURCES = [
+              "https://us-east.bltscdn.com/sub/bolt",
+              "https://us-east.bltscdn.com/sub",
+          ]
 
-            async function run() {
-              let allLinks = [];
+          FALLBACK_SOURCES = [
+              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt",
+              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/vless.txt",
+              "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/vless",
+              "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt",
+          ]
 
-              for (const url of SOURCES) {
-                const res = await fetch(url, {
-                  headers: {
-                    "User-Agent": "v2rayNG/1.8.23",
-                    "Accept": "*/*"
-                  }
-                });
+          MAX_EXTRA_NODES = 30
 
-                if (!res.ok) {
-                  throw new Error(`HTTP ${res.status} for ${url}`);
-                }
+          def extract_vless_from_text(text):
+              found = []
+              if not text:
+                  return found
 
-                let raw = (await res.text()).trim();
+              # Прямые vless:// ссылки
+              for line in text.splitlines():
+                  s = line.strip()
+                  if s.startswith("vless://"):
+                      found.append(s)
 
-                if (!raw.includes("://")) {
-                  try {
-                    const decoded = Buffer.from(raw, "base64").toString("utf8");
-                    if (decoded.includes("://")) {
-                      raw = decoded;
-                    }
-                  } catch (e) {}
-                }
+              # Если попались vless:// внутри строки без переносов
+              for m in re.findall(r"vless://[^\s\"'<>]+", text):
+                  found.append(m.strip())
 
-                const links = raw
-                  .split(/\r?\n/)
-                  .map(line => line.trim())
-                  .filter(line => line.includes("://"));
+              # Попытка декодировать base64
+              if not found:
+                  try:
+                      compact = "".join(text.split())
+                      padded = compact + "=" * (-len(compact) % 4)
+                      decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+                      for line in decoded.splitlines():
+                          s = line.strip()
+                          if s.startswith("vless://"):
+                              found.append(s)
+                      for m in re.findall(r"vless://[^\s\"'<>]+", decoded):
+                          found.append(m.strip())
+                  except Exception:
+                      pass
 
-                allLinks.push(...links);
-              }
+              return found
 
-              if (allLinks.length === 0) {
-                throw new Error("No valid proxy links found");
-              }
+          def fetch_source(url):
+              headers_list = [
+                  {"User-Agent": "v2rayNG/1.9.10", "Accept": "*/*"},
+                  {"User-Agent": "HiddifyNext/2.5.7", "Accept": "*/*"},
+                  {"User-Agent": "Mozilla/5.0 (Linux; Android 14)", "Accept": "*/*"},
+              ]
+              for hdrs in headers_list:
+                  try:
+                      req = urllib.request.Request(url, headers=hdrs)
+                      with urllib.request.urlopen(req, timeout=20) as resp:
+                          raw = resp.read().decode("utf-8", errors="ignore").strip()
+                      links = extract_vless_from_text(raw)
+                      if links:
+                          print(f"[OK] {url} -> {len(links)} vless")
+                          return links
+                  except Exception as e:
+                      last_err = e
+              print(f"[SKIP/FAIL] {url}")
+              return []
 
-              const renamed = allLinks.map((link, idx) => {
-                const name = encodeURIComponent(`Бахмут VPN #${idx + 1}🇺🇦`);
-                const base = link.split("#")[0];
-                return `${base}#${name}`;
-              });
+          def parse_host_port(uri):
+              m = re.match(r"^vless://[^@]+@(\[[^\]]+\]|[^:/?#]+):(\d+)", uri)
+              if not m:
+                  return None, None
+              return m.group(1).strip("[]"), int(m.group(2))
 
-              fs.writeFileSync("sub.txt", renamed.join("\n") + "\n", "utf8");
-              console.log(`Updated ${renamed.length} servers as Бахмут VPN #N🇺🇦`);
-            }
+          def is_alive(uri):
+              host, port = parse_host_port(uri)
+              if not host or not port:
+                  return False
+              try:
+                  with socket.create_connection((host, port), timeout=2.5):
+                      return True
+              except Exception:
+                  return False
 
-            run().catch((err) => {
-              console.error(err);
-              process.exit(1);
-            });
-          '
+          manual_nodes = []
+          try:
+              with open("manual.txt", "r", encoding="utf-8") as f:
+                  manual_nodes = [line.strip() for line in f if line.strip().startswith("vless://")]
+          except FileNotFoundError:
+              pass
 
-      - name: Commit and push changes
+          seen_base = {u.split("#", 1)[0] for u in manual_nodes}
+
+          # Сначала пробуем свежие ключи с исходника
+          fresh_primary = []
+          for src in PRIMARY_SOURCES:
+              for u in fetch_source(src):
+                  base = u.split("#", 1)[0]
+                  if base not in seen_base:
+                      seen_base.add(base)
+                      fresh_primary.append(base)
+
+          # Затем добираем с резервных списков
+          fresh_fallback = []
+          for src in FALLBACK_SOURCES:
+              for u in fetch_source(src):
+                  base = u.split("#", 1)[0]
+                  if base not in seen_base and ("security=reality" in base or "security=tls" in base):
+                      seen_base.add(base)
+                      fresh_fallback.append(base)
+
+          candidates = fresh_primary + fresh_fallback
+          print(f"Primary fresh: {len(fresh_primary)}, Fallback candidates: {len(fresh_fallback)}")
+
+          alive_extra = []
+          with ThreadPoolExecutor(max_workers=40) as pool:
+              for uri, ok in zip(candidates[:400], pool.map(is_alive, candidates[:400])):
+                  if ok:
+                      alive_extra.append(uri)
+                      if len(alive_extra) >= MAX_EXTRA_NODES:
+                          break
+
+          all_bases = [u.split("#", 1)[0] for u in manual_nodes] + alive_extra
+
+          final_lines = []
+          for idx, base in enumerate(all_bases, start=1):
+              name = urllib.parse.quote(f"Бахмут VPN #{idx}🇺🇦")
+              final_lines.append(f"{base}#{name}")
+
+          with open("sub.txt", "w", encoding="utf-8") as f:
+              f.write("\n".join(final_lines) + "\n")
+
+          print(f"Saved {len(final_lines)} nodes ({len(manual_nodes)} manual + {len(alive_extra)} auto).")
+          EOF
+
+      - name: Commit and push updated subscription
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add sub.txt
-          git diff --staged --quiet || git commit -m "Update Бахмут VPN subscription"
+          git diff --staged --quiet || git commit -m "Auto-update subscription nodes"
           git push
+
