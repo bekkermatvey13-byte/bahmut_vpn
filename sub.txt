@@ -1,3 +1,5 @@
+#profile-title: base64:QmFobXV0IFZQTg==
+#profile-update-interval: 1
 vless://299a8456-7c7a-470e-ae0d-bfd2c220fdbe@144.31.172.137:2053?encryption=none&flow=xtls-rprx-vision&type=tcp&security=reality&sni=www.samsung.com&fp=chrome&pbk=qlEfCPyaZAb_DqUZbd9Rv1jjxeaVKxqWGJkXJ_Gw2WA&sid=82c22bbb2ceda071#%F0%9F%87%AA%F0%9F%87%BA%20BoltVPN_10557-1%20%7C%20%D0%91%D1%8B%D1%81%D1%82%D1%80%D1%8B%D0%B9
 hysteria2://299a8456-7c7a-470e-ae0d-bfd2c220fdbe@153.76.190.9:8443/?sni=speedtestmark.com#%F0%9F%87%AA%F0%9F%87%BA%20BoltVPN_10557-1%20%7C%20Hysteria
 vless://299a8456-7c7a-470e-ae0d-bfd2c220fdbe@141.0.187.113:2083?encryption=none&type=ws&path=%2Fvless-ws&security=tls&sni=onecloudstream.com&fp=chrome&alpn=http%2F1.1#%F0%9F%87%AA%F0%9F%87%BA%20BoltVPN_10557-1%20%7C%20%D0%91%D1%8B%D1%81%D1%82%D1%80%D1%8B%D0%B9%20%28WS%2C%20%D0%B7%D0%B0%D0%BF%D0%B0%D1%81%D0%BD%D0%BE%D0%B9%29
